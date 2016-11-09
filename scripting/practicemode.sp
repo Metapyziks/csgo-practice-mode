@@ -67,12 +67,38 @@ KeyValues g_GrenadeLocationsKv;
 int g_CurrentSavedGrenadeId[MAXPLAYERS+1];
 bool g_UpdatedGrenadeKv = false; // whether there has been any changed the kv structure this map
 
+enum GrenadeType {
+    GrenadeType_None,
+    GrenadeType_SmokeGrenade,
+    GrenadeType_FlashBang,
+    GrenadeType_HEGrenade,
+    GrenadeType_Molotov,
+    GrenadeType_Decoy
+};
+
+enum GrenadeFlag {
+    GrenadeFlag_Default     = 0,
+    GrenadeFlag_ShortThrow  = (1 << 0),
+    GrenadeFlag_MiddleThrow = (1 << 1),
+    GrenadeFlag_Jump        = (1 << 2),
+    GrenadeFlag_Crouch      = (1 << 3),
+    GrenadeFlag_Walk        = (1 << 4),
+    GrenadeFlag_Forward     = (1 << 5),
+    GrenadeFlag_Back        = (1 << 6),
+    GrenadeFlag_Left        = (1 << 7),
+    GrenadeFlag_Right       = (1 << 8),
+};
+
 // Grenade history data
 int g_GrenadeHistoryIndex[MAXPLAYERS+1];
 ArrayList g_GrenadeHistoryPositions[MAXPLAYERS+1];
 ArrayList g_GrenadeHistoryAngles[MAXPLAYERS+1];
+ArrayList g_GrenadeHistoryFlags[MAXPLAYERS+1];
 
 float g_LastGrenadeThrowTime[MAXPLAYERS+1];
+float g_LastGrenadeDestination[MAXPLAYERS+1][3];
+float g_LastGrenadeAirTime[MAXPLAYERS+1];
+GrenadeType g_LastGrenadeType[MAXPLAYERS+1];
 bool g_TestingFlash[MAXPLAYERS+1];
 float g_TestingFlashOrigins[MAXPLAYERS+1][3];
 float g_TestingFlashAngles[MAXPLAYERS+1][3];
@@ -163,6 +189,7 @@ public void OnPluginStart() {
     for (int i = 0; i <= MAXPLAYERS; i++) {
         g_GrenadeHistoryPositions[i] = new ArrayList(3);
         g_GrenadeHistoryAngles[i] = new ArrayList(3);
+        g_GrenadeHistoryFlags[i] = new ArrayList(1);
     }
 
     RegAdminCmd("sm_launchpractice", Command_LaunchPracticeMode, ADMFLAG_CHANGEMAP, "Launches practice mode");
@@ -322,6 +349,13 @@ public void OnClientConnected(int client) {
     g_GrenadeHistoryIndex[client] = -1;
     ClearArray(g_GrenadeHistoryPositions[client]);
     ClearArray(g_GrenadeHistoryAngles[client]);
+    ClearArray(g_GrenadeHistoryFlags[client]);
+
+    g_LastGrenadeDestination[client][0] = 0.0;
+    g_LastGrenadeDestination[client][1] = 0.0;
+    g_LastGrenadeDestination[client][2] = 0.0;
+    g_LastGrenadeAirTime[client] = 0.0;
+    g_LastGrenadeType[client] = GrenadeType_None;
     g_TestingFlash[client] = false;
     g_RunningTimeCommand[client] = false;
     g_RunningLiveTimeCommand[client] = false;
@@ -786,6 +820,21 @@ public Action Timer_FakeGrenadeBack(Handle timer, int serial) {
     }
 }
 
+GrenadeFlag GetGrenadeFlags(int client) {
+    int buttons = GetClientButtons(client);
+
+    GrenadeFlag flags = GrenadeFlag_Default;
+
+    if ((buttons & IN_JUMP) != 0) flags |= GrenadeFlag_Jump;
+    if ((buttons & IN_DUCK) != 0) flags |= GrenadeFlag_Crouch;
+    if ((buttons & IN_WALK) != 0) flags |= GrenadeFlag_Walk;
+
+    if ((buttons & IN_FORWARD) != 0) flags |= GrenadeFlag_Forward;
+    if ((buttons & IN_BACK) != 0) flags |= GrenadeFlag_Back;
+    if ((buttons & IN_MOVELEFT) != 0) flags |= GrenadeFlag_Left;
+    if ((buttons & IN_MOVERIGHT) != 0) flags |= GrenadeFlag_Right;
+}
+
 public Action Event_WeaponFired(Event event, const char[] name, bool dontBroadcast) {
     if (!g_InPracticeMode) {
         return;
@@ -800,14 +849,25 @@ public Action Event_WeaponFired(Event event, const char[] name, bool dontBroadca
         if (GetArraySize(g_GrenadeHistoryPositions[client]) >= g_MaxHistorySizeCvar.IntValue) {
             RemoveFromArray(g_GrenadeHistoryPositions[client], 0);
             RemoveFromArray(g_GrenadeHistoryAngles[client], 0);
+            RemoveFromArray(g_GrenadeHistoryFlags[client], 0);
         }
+
+        g_LastGrenadeDestination[client][0] = 0.0;
+        g_LastGrenadeDestination[client][1] = 0.0;
+        g_LastGrenadeDestination[client][2] = 0.0;
+        g_LastGrenadeAirTime[client] = 0.0;
+
+        g_LastGrenadeType[client] = GetGrenadeType(weapon);
 
         float position[3];
         float angles[3];
         GetClientAbsOrigin(client, position);
         GetClientEyeAngles(client, angles);
+
         PushArrayArray(g_GrenadeHistoryPositions[client], position, sizeof(position));
         PushArrayArray(g_GrenadeHistoryAngles[client], angles, sizeof(angles));
+        PushArrayCell(g_GrenadeHistoryFlags[client], GetGrenadeFlags(client));
+
         g_GrenadeHistoryIndex[client] = g_GrenadeHistoryPositions[client].Length;
     }
 }
@@ -829,9 +889,19 @@ public Action Event_MoltovDetonate(Event event, const char[] name, bool dontBroa
 public void GrenadeDetonateTimerHelper(Event event, const char[] grenadeName) {
     int userid = event.GetInt("userid");
     int client = GetClientOfUserId(userid);
-    if (IsPlayer(client) && GetCookieBool(client, g_ShowGrenadeAirtimeCookie, SHOW_AIRTIME_DEFAULT)) {
-        float dt = GetEngineTime() - g_LastGrenadeThrowTime[client];
-        PM_Message(client, "Airtime of %s: %.1f seconds", grenadeName, dt);
+
+    if (!IsPlayer(client)) {
+        return;
+    }
+
+    g_LastGrenadeDestination[client][0] = event.GetFloat("x");
+    g_LastGrenadeDestination[client][1] = event.GetFloat("y");
+    g_LastGrenadeDestination[client][2] = event.GetFloat("z");
+
+    g_LastGrenadeAirTime[client] = GetEngineTime() - g_LastGrenadeThrowTime[client];
+
+    if (GetCookieBool(client, g_ShowGrenadeAirtimeCookie, SHOW_AIRTIME_DEFAULT)) {
+        PM_Message(client, "Airtime of %s: %.1f seconds", grenadeName, g_LastGrenadeAirTime[client]);
     }
 }
 

@@ -77,6 +77,7 @@ public Action Command_ClearNades(int client, int args) {
     if (g_InPracticeMode) {
         ClearArray(g_GrenadeHistoryPositions[client]);
         ClearArray(g_GrenadeHistoryAngles[client]);
+        ClearArray(g_GrenadeHistoryFlags[client]);
         PM_Message(client, "Grenade history cleared.");
     }
 
@@ -211,17 +212,25 @@ public Action Command_SaveGrenade(int client, int args) {
         return Plugin_Handled;
     }
 
-
     if (CountGrenadesForPlayer(auth) >= g_MaxGrenadesSavedCvar.IntValue) {
         PM_Message(client, "You have reached the maximum number of grenades you can save (%d).",
                         g_MaxGrenadesSavedCvar.IntValue);
         return Plugin_Handled;
     }
 
+    int index = g_GrenadeHistoryIndex[client] - 1;
+
+    if (g_GrenadeHistoryIndex[client] < 0) {
+        PM_Message(client, "You have not thrown any grenades to save.");
+        return Plugin_Handled;
+    }
+
     float origin[3];
     float angles[3];
-    GetClientAbsOrigin(client, origin);
-    GetClientEyeAngles(client, angles);
+
+    GetArrayArray(g_GrenadeHistoryPositions[client], index, origin, sizeof(origin));
+    GetArrayArray(g_GrenadeHistoryAngles[client], index, angles, sizeof(angles));
+    GrenadeFlag flags = GetArrayCell(g_GrenadeHistoryFlags[client], index);
 
     Action ret = Plugin_Continue;
     Call_StartForward(g_OnGrenadeSaved);
@@ -231,8 +240,11 @@ public Action Command_SaveGrenade(int client, int args) {
     Call_PushString(name);
     Call_Finish(ret);
 
+    char categoryString[GRENADE_CATEGORY_LENGTH];
+    GetGrenadeName(g_LastGrenadeType[client], categoryString, sizeof(categoryString));
+
     if (ret < Plugin_Handled) {
-        int nadeId = SaveGrenadeToKv(client, origin, angles, name);
+        int nadeId = SaveGrenadeToKv(client, origin, angles, g_LastGrenadeDestination[client], flags, g_LastGrenadeAirTime[client], name, "", categoryString);
         g_CurrentSavedGrenadeId[client] = nadeId;
         PM_Message(client, "Saved grenade (id %d). Type .desc <description> to add a description or .delete to delete this position.", nadeId);
     }
