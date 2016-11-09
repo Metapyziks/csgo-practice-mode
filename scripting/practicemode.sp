@@ -95,6 +95,8 @@ ArrayList g_GrenadeHistoryPositions[MAXPLAYERS+1];
 ArrayList g_GrenadeHistoryAngles[MAXPLAYERS+1];
 ArrayList g_GrenadeHistoryFlags[MAXPLAYERS+1];
 
+float g_LastLeftClickTime[MAXPLAYERS+1];
+float g_LastRightClickTime[MAXPLAYERS+1];
 float g_LastGrenadeThrowTime[MAXPLAYERS+1];
 float g_LastGrenadeDestination[MAXPLAYERS+1][3];
 float g_LastGrenadeAirTime[MAXPLAYERS+1];
@@ -351,6 +353,9 @@ public void OnClientConnected(int client) {
     ClearArray(g_GrenadeHistoryAngles[client]);
     ClearArray(g_GrenadeHistoryFlags[client]);
 
+    g_LastLeftClickTime[client] = 0.0;
+    g_LastRightClickTime[client] = 0.0;
+
     g_LastGrenadeDestination[client][0] = 0.0;
     g_LastGrenadeDestination[client][1] = 0.0;
     g_LastGrenadeDestination[client][2] = 0.0;
@@ -477,6 +482,16 @@ public void GetColor(ClientColor c, int array[4]) {
     array[3] = 255;
 }
 
+void UpdateAttackState(int client, int buttons, int button, float[] times) {
+    bool held = (buttons & button) != 0;
+    if (held) times[client] = -1.0;
+    else if (times[client] == -1.0) times[client] = GetEngineTime();
+}
+
+float GetTimeSinceLastAttack(int client, float[] times) {
+    return times[client] == -1.0 ? 0.0 : GetEngineTime() - times[client];
+}
+
 public Action OnPlayerRunCmd(int client, int& buttons, int& impulse,
     float vel[3], float angles[3],
     int& weapon, int& subtype, int& cmdnum,
@@ -484,22 +499,26 @@ public Action OnPlayerRunCmd(int client, int& buttons, int& impulse,
     if (!IsPlayer(client))
         return Plugin_Continue;
 
-    if (g_InPracticeMode) {
-        bool moving = MovingButtons(buttons);
+    if (!g_InPracticeMode)
+        return Plugin_Continue;
 
-        if (g_RunningTimeCommand[client] && !g_RunningLiveTimeCommand[client]) { // if using autotimer
-            if (moving) {
-                g_RunningLiveTimeCommand[client] = true;
-                StartClientTimer(client);
-            }
+    UpdateAttackState(client, buttons, IN_ATTACK, g_LastLeftClickTime);
+    UpdateAttackState(client, buttons, IN_ATTACK2, g_LastRightClickTime);
+
+    bool moving = MovingButtons(buttons);
+
+    if (g_RunningTimeCommand[client] && !g_RunningLiveTimeCommand[client]) { // if using autotimer
+        if (moving) {
+            g_RunningLiveTimeCommand[client] = true;
+            StartClientTimer(client);
         }
+    }
 
-        if (g_RunningTimeCommand[client] && g_RunningLiveTimeCommand[client]) {
-            if (!moving && GetEntityFlags(client) & FL_ONGROUND) {
-                g_RunningTimeCommand[client] = false;
-                g_RunningLiveTimeCommand[client] = false;
-                StopClientTimer(client);
-            }
+    if (g_RunningTimeCommand[client] && g_RunningLiveTimeCommand[client]) {
+        if (!moving && GetEntityFlags(client) & FL_ONGROUND) {
+            g_RunningTimeCommand[client] = false;
+            g_RunningLiveTimeCommand[client] = false;
+            StopClientTimer(client);
         }
     }
 
@@ -825,14 +844,22 @@ GrenadeFlag GetGrenadeFlags(int client) {
 
     GrenadeFlag flags = GrenadeFlag_Default;
 
+    bool left = GetTimeSinceLastAttack(client, g_LastLeftClickTime) <= 0.25;
+    bool right = GetTimeSinceLastAttack(client, g_LastRightClickTime) <= 0.25;
+
+    if (left && right) flags |= GrenadeFlag_MiddleThrow;
+    else if (right) flags |= GrenadeFlag_ShortThrow;
+
     if ((buttons & IN_JUMP) != 0) flags |= GrenadeFlag_Jump;
     if ((buttons & IN_DUCK) != 0) flags |= GrenadeFlag_Crouch;
-    if ((buttons & IN_WALK) != 0) flags |= GrenadeFlag_Walk;
+    if ((buttons & IN_SPEED) != 0) flags |= GrenadeFlag_Walk;
 
     if ((buttons & IN_FORWARD) != 0) flags |= GrenadeFlag_Forward;
     if ((buttons & IN_BACK) != 0) flags |= GrenadeFlag_Back;
     if ((buttons & IN_MOVELEFT) != 0) flags |= GrenadeFlag_Left;
     if ((buttons & IN_MOVERIGHT) != 0) flags |= GrenadeFlag_Right;
+
+    return flags;
 }
 
 public Action Event_WeaponFired(Event event, const char[] name, bool dontBroadcast) {
@@ -845,7 +872,7 @@ public Action Event_WeaponFired(Event event, const char[] name, bool dontBroadca
     char weapon[64];
     event.GetString("weapon", weapon, sizeof(weapon));
 
-    if (IsGrenadeWeapon(weapon) && IsPlayer(client)) {
+    if (IsSaveableGrenade(weapon) && IsPlayer(client)) {
         if (GetArraySize(g_GrenadeHistoryPositions[client]) >= g_MaxHistorySizeCvar.IntValue) {
             RemoveFromArray(g_GrenadeHistoryPositions[client], 0);
             RemoveFromArray(g_GrenadeHistoryAngles[client], 0);

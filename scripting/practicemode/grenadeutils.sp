@@ -27,17 +27,26 @@ public bool IsGrenadeWeapon(const char[] weapon) {
     return FindStringInArray2(grenades, sizeof(grenades), weapon) >= 0;
 }
 
+bool IsSaveableGrenade(const char[] weapon) {
+    switch (GetGrenadeType(weapon)) {
+        case GrenadeType_SmokeGrenade, GrenadeType_FlashBang, GrenadeType_Molotov:
+            return true;
+    }
+
+    return false;
+}
+
 GrenadeType GetGrenadeType(const char[] weapon) {
     if (StrEqual(weapon, "smokegrenade")) {
         return GrenadeType_SmokeGrenade;
     } else if (StrEqual(weapon, "flashbang")) {
         return GrenadeType_FlashBang;
-    } else if (StrEqual(weapon, "hegrenade")) {
-        return GrenadeType_HEGrenade;
+    //} else if (StrEqual(weapon, "hegrenade")) {
+    //    return GrenadeType_HEGrenade;
     } else if (StrEqual(weapon, "molotov") || StrEqual(weapon, "incgrenade")) {
         return GrenadeType_Molotov;
-    } else if (StrEqual(weapon, "decoy")) {
-        return GrenadeType_Decoy;
+    //} else if (StrEqual(weapon, "decoy")) {
+    //    return GrenadeType_Decoy;
     }
 
     return GrenadeType_None;
